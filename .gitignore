@@ -1,0 +1,44 @@
+download/
+# Python 기본 무시 파일/폴더
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.log
+
+# 가상환경
+venv/
+ENV/
+env/
+.venv/
+.python-version
+
+# IDE/에디터 관련
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# OS/툴 관련
+.DS_Store
+Thumbs.db
+
+# 기타
+pip-wheel-metadata/
+*.sqlite3
+*.db
+# pytest, coverage 등 테스트 관련
+htmlcov/
+.tox/
+.coverage
+.cache
+.pytest_cache/
+.mypy_cache/
+# Jupyter 노트북 체크포인트
+.ipynb_checkpoints/
