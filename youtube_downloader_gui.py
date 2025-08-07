@@ -175,8 +175,8 @@ class YouTubeDownloaderGUI:
         self.worker_label = ttk.Label(worker_frame, text="(기본값: 3)")
         self.worker_label.grid(row=0, column=1)
         
-        # 모드 변경 시 워커 수 업데이트
-        self.mode_var.trace('w', self.update_worker_count)
+        # 모드 변경 시 워커 수 업데이트 (Python 3.13 호환)
+        self.mode_var.trace_add('write', self.update_worker_count)
     
     def setup_progress_display(self, parent):
         """진행률 표시"""
@@ -238,17 +238,30 @@ class YouTubeDownloaderGUI:
             return
         
         if not validate_url(url):
-            messagebox.showerror("오류", "유효한 YouTube URL이 아닙니다.")
+            messagebox.showerror("오류", "유효한 YouTube URL이 아닙니다.\n\n올바른 URL 형식:\n- 플레이리스트: https://www.youtube.com/playlist?list=PLxxxx\n- 단일 비디오: https://www.youtube.com/watch?v=xxxx\n- youtu.be: https://youtu.be/xxxx")
             return
         
-        if not url.startswith("https://www.youtube.com/playlist?"):
-            result = messagebox.askyesno("경고", 
-                                       "플레이리스트 URL이 아닐 수 있습니다.\n계속하시겠습니까?")
+        # URL 타입 확인
+        if 'playlist' in url and 'list=' in url:
+            self.log_message("✅ 플레이리스트 URL 검증 완료")
+            messagebox.showinfo("성공", "플레이리스트 URL이 유효합니다!")
+        elif 'watch' in url and 'v=' in url:
+            result = messagebox.askyesno("확인", 
+                                       "단일 비디오 URL입니다.\n플레이리스트 다운로더에서 사용하시겠습니까?")
             if not result:
                 return
-        
-        self.log_message("✅ URL 검증 완료")
-        messagebox.showinfo("성공", "URL이 유효합니다!")
+            self.log_message("✅ 단일 비디오 URL 검증 완료")
+            messagebox.showinfo("성공", "단일 비디오 URL이 유효합니다!")
+        elif 'youtu.be' in url:
+            result = messagebox.askyesno("확인", 
+                                       "youtu.be 링크입니다.\n플레이리스트 다운로더에서 사용하시겠습니까?")
+            if not result:
+                return
+            self.log_message("✅ youtu.be URL 검증 완료")
+            messagebox.showinfo("성공", "youtu.be URL이 유효합니다!")
+        else:
+            self.log_message("✅ URL 검증 완료")
+            messagebox.showinfo("성공", "URL이 유효합니다!")
     
     def browse_path(self):
         """저장 경로 선택"""
@@ -377,9 +390,15 @@ class YouTubeDownloaderGUI:
             
             self.message_queue.put(("log", f"총 {len(videos)}개의 비디오를 발견했습니다.\n"))
             
-            # 다운로드 경로 생성
+            # 다운로드 경로를 절대 경로로 변환하고 생성
+            path = os.path.abspath(path)
             if not os.path.exists(path):
-                os.makedirs(path)
+                try:
+                    os.makedirs(path, exist_ok=True)
+                    self.message_queue.put(("log", f"📁 다운로드 경로 생성: {path}\n"))
+                except Exception as e:
+                    self.message_queue.put(("error", f"다운로드 경로 생성 실패: {e}"))
+                    return
             
             # 다운로드 모드에 따른 함수 선택
             if mode == "1":

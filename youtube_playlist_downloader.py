@@ -193,10 +193,39 @@ def validate_url(url):
     """
     URL 유효성을 검사하는 함수
     """
+    if not url or not isinstance(url, str):
+        return False
+    
     try:
         parsed = urlparse(url)
-        return parsed.scheme in ['http', 'https'] and 'youtube.com' in parsed.netloc
-    except:
+        
+        # 기본 URL 형식 검사
+        if parsed.scheme not in ['http', 'https']:
+            return False
+        
+        # YouTube 도메인 검사
+        if 'youtube.com' not in parsed.netloc and 'youtu.be' not in parsed.netloc:
+            return False
+        
+        # 플레이리스트 URL 검사
+        if 'playlist' in url:
+            if 'list=' not in url:
+                return False
+        
+        # 단일 비디오 URL 검사
+        elif 'watch' in url:
+            if 'v=' not in url:
+                return False
+        
+        # youtu.be 링크 검사
+        elif 'youtu.be' in url:
+            if not parsed.path or len(parsed.path.strip('/')) < 10:
+                return False
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ URL 검증 오류: {e}")
         return False
 
 def download_single_video_extreme_max(video_url, download_path, video_info=None, max_retries=5, quality_format=None):
@@ -206,11 +235,26 @@ def download_single_video_extreme_max(video_url, download_path, video_info=None,
     if quality_format is None:
         quality_format = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
     
+    # 다운로드 경로를 절대 경로로 변환
+    download_path = os.path.abspath(download_path)
+    
+    # 다운로드 경로가 존재하는지 확인하고 생성
+    if not os.path.exists(download_path):
+        try:
+            os.makedirs(download_path, exist_ok=True)
+            print(f"📁 다운로드 경로 생성: {download_path}")
+        except Exception as e:
+            print(f"❌ 다운로드 경로 생성 실패: {e}")
+            return {'success': False, 'url': video_url, 'error': f'경로 생성 실패: {e}', 'title': video_info.get('title', 'Unknown') if video_info else 'Unknown'}
+    
+    # 파일명 안전성을 위한 템플릿 설정
+    safe_filename_template = f'{download_path}/%(title).100s.%(ext)s'
+    
     # 극한 성능을 위한 yt-dlp 옵션
     ydl_opts = {
         'format': quality_format,
         'merge_output_format': 'mp4',
-        'outtmpl': f'{download_path}/%(title)s.%(ext)s',
+        'outtmpl': safe_filename_template,
         'quiet': True,
         'ignoreerrors': True,
         'no_warnings': True,
@@ -251,16 +295,88 @@ def download_single_video_extreme_max(video_url, download_path, video_info=None,
         'concurrent_fragment_downloads': 50,  # 동시 프래그먼트 다운로드 극한 증가
         'buffersize': 1024 * 1024 * 20,  # 버퍼 크기 극한 증가 (20MB)
         'http_chunk_size': 10485760 * 10,  # 청크 크기 극한 증가 (100MB)
+        # 파일 저장 안전성 개선
+        'restrictfilenames': True,  # 파일명 제한 (특수문자 제거)
+        'windowsfilenames': False,  # Windows 파일명 규칙 비활성화
     }
     
     for attempt in range(max_retries + 1):
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([video_url])
-            update_progress(True)
-            return {'success': True, 'url': video_url, 'title': video_info.get('title', 'Unknown') if video_info else 'Unknown', 'attempts': attempt + 1}
+            
+            # 파일이 실제로 저장되었는지 확인 (restrictfilenames 옵션 고려)
+            video_title = video_info.get('title', 'Unknown') if video_info else 'Unknown'
+            
+            # restrictfilenames 옵션으로 인한 파일명 변경을 고려한 검색
+            import re
+            safe_title = re.sub(r'[^\w\s-]', '', video_title)  # 특수문자 제거
+            safe_title = re.sub(r'[-\s]+', '-', safe_title)  # 공백을 하이픈으로 변경
+            safe_title = safe_title[:100]  # 100자로 제한
+            
+            # 가능한 파일명 패턴들
+            possible_filenames = [
+                f"{video_title}.mp4",
+                f"{safe_title}.mp4",
+                f"{video_title[:50]}.mp4",
+                f"{safe_title[:50]}.mp4"
+            ]
+            
+            # 실제 저장된 파일 찾기
+            actual_file_path = None
+            for filename in possible_filenames:
+                file_path = os.path.join(download_path, filename)
+                if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                    actual_file_path = file_path
+                    break
+            
+            # 파일을 찾지 못한 경우, 최근 생성된 mp4 파일 검색
+            if actual_file_path is None:
+                try:
+                    mp4_files = []
+                    for file in os.listdir(download_path):
+                        if file.endswith('.mp4') and os.path.isfile(os.path.join(download_path, file)):
+                            file_path = os.path.join(download_path, file)
+                            # 최근 30초 내에 생성된 파일만 고려
+                            if time.time() - os.path.getctime(file_path) < 30:
+                                mp4_files.append((file_path, os.path.getctime(file_path)))
+                    
+                    if mp4_files:
+                        # 가장 최근에 생성된 파일 선택
+                        mp4_files.sort(key=lambda x: x[1], reverse=True)
+                        actual_file_path = mp4_files[0][0]
+                        print(f"🔍 실제 저장된 파일 발견: {os.path.basename(actual_file_path)}")
+                except Exception as e:
+                    print(f"⚠️ 파일 검색 중 오류: {e}")
+            
+            if actual_file_path and os.path.exists(actual_file_path):
+                file_size = os.path.getsize(actual_file_path)
+                if file_size > 0:
+                    update_progress(True)
+                    return {'success': True, 'url': video_url, 'title': video_title, 'attempts': attempt + 1, 'file_path': actual_file_path, 'file_size': file_size}
+                else:
+                    print(f"⚠️ 파일이 생성되었지만 크기가 0입니다: {actual_file_path}")
+                    if attempt < max_retries:
+                        time.sleep(0.1)
+                        continue
+                    else:
+                        update_progress(False)
+                        return {'success': False, 'url': video_url, 'error': '파일 크기가 0입니다', 'title': video_title}
+            else:
+                print(f"⚠️ 예상 파일이 생성되지 않았습니다")
+                print(f"🔍 검색한 파일명 패턴: {possible_filenames}")
+                print(f"📁 다운로드 경로: {download_path}")
+                if attempt < max_retries:
+                    time.sleep(0.1)
+                    continue
+                else:
+                    update_progress(False)
+                    return {'success': False, 'url': video_url, 'error': '파일이 생성되지 않았습니다', 'title': video_title}
+                    
         except Exception as e:
             error_msg = str(e)
+            print(f"❌ 다운로드 오류 (시도 {attempt + 1}/{max_retries + 1}): {error_msg}")
+            
             if 'Video unavailable' in error_msg:
                 update_progress(False)
                 return {'success': False, 'url': video_url, 'error': 'Video unavailable', 'title': video_info.get('title', 'Unknown') if video_info else 'Unknown'}
@@ -270,6 +386,9 @@ def download_single_video_extreme_max(video_url, download_path, video_info=None,
             elif 'This video is not available' in error_msg:
                 update_progress(False)
                 return {'success': False, 'url': video_url, 'error': 'Video not available', 'title': video_info.get('title', 'Unknown') if video_info else 'Unknown'}
+            elif 'No such file or directory' in error_msg:
+                update_progress(False)
+                return {'success': False, 'url': video_url, 'error': '파일 시스템 오류', 'title': video_info.get('title', 'Unknown') if video_info else 'Unknown'}
             elif attempt < max_retries:
                 time.sleep(0.1)  # 극한 모드에서는 최소 대기
                 continue  # 재시도
@@ -284,10 +403,25 @@ def download_single_video_max(video_url, download_path, video_info=None, max_ret
     if quality_format is None:
         quality_format = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
     
+    # 다운로드 경로를 절대 경로로 변환
+    download_path = os.path.abspath(download_path)
+    
+    # 다운로드 경로가 존재하는지 확인하고 생성
+    if not os.path.exists(download_path):
+        try:
+            os.makedirs(download_path, exist_ok=True)
+            print(f"📁 다운로드 경로 생성: {download_path}")
+        except Exception as e:
+            print(f"❌ 다운로드 경로 생성 실패: {e}")
+            return {'success': False, 'url': video_url, 'error': f'경로 생성 실패: {e}', 'title': video_info.get('title', 'Unknown') if video_info else 'Unknown'}
+    
+    # 파일명 안전성을 위한 템플릿 설정
+    safe_filename_template = f'{download_path}/%(title).100s.%(ext)s'
+    
     ydl_opts = {
         'format': quality_format,
         'merge_output_format': 'mp4',
-        'outtmpl': f'{download_path}/%(title)s.%(ext)s',
+        'outtmpl': safe_filename_template,
         'quiet': True,
         'ignoreerrors': True,
         'no_warnings': True,
@@ -301,16 +435,85 @@ def download_single_video_max(video_url, download_path, video_info=None, max_ret
         'extractor_retries': max_retries,  # 추출기 재시도
         'sleep_interval': 0,  # 대기 시간 최소화
         'max_sleep_interval': 1,  # 최대 대기 시간 제한
+        # 파일 저장 안전성 개선
+        'restrictfilenames': True,  # 파일명 제한 (특수문자 제거)
+        'windowsfilenames': False,  # Windows 파일명 규칙 비활성화
     }
     
     for attempt in range(max_retries + 1):
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([video_url])
-            update_progress(True)
-            return {'success': True, 'url': video_url, 'title': video_info.get('title', 'Unknown') if video_info else 'Unknown', 'attempts': attempt + 1}
+            
+            # 파일이 실제로 저장되었는지 확인 (restrictfilenames 옵션 고려)
+            video_title = video_info.get('title', 'Unknown') if video_info else 'Unknown'
+            
+            # restrictfilenames 옵션으로 인한 파일명 변경을 고려한 검색
+            import re
+            safe_title = re.sub(r'[^\w\s-]', '', video_title)  # 특수문자 제거
+            safe_title = re.sub(r'[-\s]+', '-', safe_title)  # 공백을 하이픈으로 변경
+            safe_title = safe_title[:100]  # 100자로 제한
+            
+            # 가능한 파일명 패턴들
+            possible_filenames = [
+                f"{video_title}.mp4",
+                f"{safe_title}.mp4",
+                f"{video_title[:50]}.mp4",
+                f"{safe_title[:50]}.mp4"
+            ]
+            
+            # 실제 저장된 파일 찾기
+            actual_file_path = None
+            for filename in possible_filenames:
+                file_path = os.path.join(download_path, filename)
+                if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                    actual_file_path = file_path
+                    break
+            
+            # 파일을 찾지 못한 경우, 최근 생성된 mp4 파일 검색
+            if actual_file_path is None:
+                try:
+                    mp4_files = []
+                    for file in os.listdir(download_path):
+                        if file.endswith('.mp4') and os.path.isfile(os.path.join(download_path, file)):
+                            file_path = os.path.join(download_path, file)
+                            # 최근 30초 내에 생성된 파일만 고려
+                            if time.time() - os.path.getctime(file_path) < 30:
+                                mp4_files.append((file_path, os.path.getctime(file_path)))
+                    
+                    if mp4_files:
+                        # 가장 최근에 생성된 파일 선택
+                        mp4_files.sort(key=lambda x: x[1], reverse=True)
+                        actual_file_path = mp4_files[0][0]
+                        print(f"🔍 실제 저장된 파일 발견: {os.path.basename(actual_file_path)}")
+                except Exception as e:
+                    print(f"⚠️ 파일 검색 중 오류: {e}")
+            
+            if actual_file_path and os.path.exists(actual_file_path):
+                file_size = os.path.getsize(actual_file_path)
+                if file_size > 0:
+                    update_progress(True)
+                    return {'success': True, 'url': video_url, 'title': video_title, 'attempts': attempt + 1, 'file_path': actual_file_path, 'file_size': file_size}
+                else:
+                    print(f"⚠️ 파일이 생성되었지만 크기가 0입니다: {actual_file_path}")
+                    if attempt < max_retries:
+                        continue
+                    else:
+                        update_progress(False)
+                        return {'success': False, 'url': video_url, 'error': '파일 크기가 0입니다', 'title': video_title}
+            else:
+                print(f"⚠️ 예상 파일이 생성되지 않았습니다: {expected_path}")
+                print(f"🔍 검색한 파일명 패턴: {possible_filenames}")
+                if attempt < max_retries:
+                    continue
+                else:
+                    update_progress(False)
+                    return {'success': False, 'url': video_url, 'error': '파일이 생성되지 않았습니다', 'title': video_title}
+                    
         except Exception as e:
             error_msg = str(e)
+            print(f"❌ 다운로드 오류 (시도 {attempt + 1}/{max_retries + 1}): {error_msg}")
+            
             if 'Video unavailable' in error_msg:
                 update_progress(False)
                 return {'success': False, 'url': video_url, 'error': 'Video unavailable', 'title': video_info.get('title', 'Unknown') if video_info else 'Unknown'}
@@ -320,6 +523,9 @@ def download_single_video_max(video_url, download_path, video_info=None, max_ret
             elif 'This video is not available' in error_msg:
                 update_progress(False)
                 return {'success': False, 'url': video_url, 'error': 'Video not available', 'title': video_info.get('title', 'Unknown') if video_info else 'Unknown'}
+            elif 'No such file or directory' in error_msg:
+                update_progress(False)
+                return {'success': False, 'url': video_url, 'error': '파일 시스템 오류', 'title': video_info.get('title', 'Unknown') if video_info else 'Unknown'}
             elif attempt < max_retries:
                 continue  # 재시도
             else:
@@ -333,22 +539,119 @@ def download_single_video(video_url, download_path, video_info=None, quality_for
     if quality_format is None:
         quality_format = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
     
+    # 다운로드 경로를 절대 경로로 변환
+    download_path = os.path.abspath(download_path)
+    
+    # 다운로드 경로가 존재하는지 확인하고 생성
+    if not os.path.exists(download_path):
+        try:
+            os.makedirs(download_path, exist_ok=True)
+            print(f"📁 다운로드 경로 생성: {download_path}")
+        except Exception as e:
+            print(f"❌ 다운로드 경로 생성 실패: {e}")
+            return {'success': False, 'url': video_url, 'error': f'경로 생성 실패: {e}', 'title': video_info.get('title', 'Unknown') if video_info else 'Unknown'}
+    
+    # 파일명 안전성을 위한 템플릿 설정
+    safe_filename_template = f'{download_path}/%(title).100s.%(ext)s'
+    
     ydl_opts = {
         'format': quality_format,
         'merge_output_format': 'mp4',
-        'outtmpl': f'{download_path}/%(title)s.%(ext)s',
+        'outtmpl': safe_filename_template,
         'quiet': True,  # 개별 다운로드는 조용히
         'ignoreerrors': True,  # 개별 비디오 오류 무시
         'no_warnings': True,
+        # 파일 저장 안전성 개선
+        'restrictfilenames': True,  # 파일명 제한 (특수문자 제거)
+        'windowsfilenames': False,  # Windows 파일명 규칙 비활성화
     }
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([video_url])
-        update_progress(True)
-        return {'success': True, 'url': video_url, 'title': video_info.get('title', 'Unknown') if video_info else 'Unknown'}
+        
+        # 파일이 실제로 저장되었는지 확인 (restrictfilenames 옵션 고려)
+        # video_info가 None인 경우 실제 비디오 정보를 가져오기
+        if video_info is None:
+            try:
+                with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
+                    video_info = ydl.extract_info(video_url, download=False)
+            except Exception as e:
+                print(f"⚠️ 비디오 정보 가져오기 실패: {e}")
+                video_info = {}
+        
+        video_title = video_info.get('title', 'Unknown') if video_info else 'Unknown'
+        
+        # restrictfilenames 옵션으로 인한 파일명 변경을 고려한 검색
+        import re
+        safe_title = re.sub(r'[^\w\s-]', '', video_title)  # 특수문자 제거
+        safe_title = re.sub(r'[-\s]+', '-', safe_title)  # 공백을 하이픈으로 변경
+        safe_title = safe_title[:100]  # 100자로 제한
+        
+        # 가능한 파일명 패턴들
+        possible_filenames = [
+            f"{video_title}.mp4",
+            f"{safe_title}.mp4",
+            f"{video_title[:50]}.mp4",
+            f"{safe_title[:50]}.mp4"
+        ]
+        
+        # restrictfilenames 옵션으로 인한 추가 패턴들
+        underscore_title = video_title.replace(' ', '_')
+        underscore_safe_title = safe_title.replace(' ', '_')
+        possible_filenames.extend([
+            f"{underscore_title}.mp4",
+            f"{underscore_safe_title}.mp4",
+            f"{underscore_title[:50]}.mp4",
+            f"{underscore_safe_title[:50]}.mp4"
+        ])
+        
+        # 실제 저장된 파일 찾기
+        actual_file_path = None
+        for filename in possible_filenames:
+            file_path = os.path.join(download_path, filename)
+            if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                actual_file_path = file_path
+                break
+        
+        # 파일을 찾지 못한 경우, 최근 생성된 mp4 파일 검색
+        if actual_file_path is None:
+            try:
+                mp4_files = []
+                for file in os.listdir(download_path):
+                    if file.endswith('.mp4') and os.path.isfile(os.path.join(download_path, file)):
+                        file_path = os.path.join(download_path, file)
+                        # 최근 30초 내에 생성된 파일만 고려
+                        if time.time() - os.path.getctime(file_path) < 30:
+                            mp4_files.append((file_path, os.path.getctime(file_path)))
+                
+                if mp4_files:
+                    # 가장 최근에 생성된 파일 선택
+                    mp4_files.sort(key=lambda x: x[1], reverse=True)
+                    actual_file_path = mp4_files[0][0]
+                    print(f"🔍 실제 저장된 파일 발견: {os.path.basename(actual_file_path)}")
+            except Exception as e:
+                print(f"⚠️ 파일 검색 중 오류: {e}")
+        
+        if actual_file_path and os.path.exists(actual_file_path):
+            file_size = os.path.getsize(actual_file_path)
+            if file_size > 0:
+                update_progress(True)
+                return {'success': True, 'url': video_url, 'title': video_title, 'file_path': actual_file_path, 'file_size': file_size}
+            else:
+                print(f"⚠️ 파일이 생성되었지만 크기가 0입니다: {actual_file_path}")
+                update_progress(False)
+                return {'success': False, 'url': video_url, 'error': '파일 크기가 0입니다', 'title': video_title}
+        else:
+            print(f"⚠️ 예상 파일이 생성되지 않았습니다")
+            print(f"🔍 검색한 파일명 패턴: {possible_filenames}")
+            print(f"📁 다운로드 경로: {download_path}")
+            update_progress(False)
+            return {'success': False, 'url': video_url, 'error': '파일이 생성되지 않았습니다', 'title': video_title}
+            
     except Exception as e:
         error_msg = str(e)
+        print(f"❌ 다운로드 오류: {error_msg}")
         update_progress(False)
         if 'Video unavailable' in error_msg:
             return {'success': False, 'url': video_url, 'error': 'Video unavailable', 'title': video_info.get('title', 'Unknown') if video_info else 'Unknown'}
@@ -356,6 +659,8 @@ def download_single_video(video_url, download_path, video_info=None, quality_for
             return {'success': False, 'url': video_url, 'error': 'Private video', 'title': video_info.get('title', 'Unknown') if video_info else 'Unknown'}
         elif 'This video is not available' in error_msg:
             return {'success': False, 'url': video_url, 'error': 'Video not available', 'title': video_info.get('title', 'Unknown') if video_info else 'Unknown'}
+        elif 'No such file or directory' in error_msg:
+            return {'success': False, 'url': video_url, 'error': '파일 시스템 오류', 'title': video_info.get('title', 'Unknown') if video_info else 'Unknown'}
         else:
             return {'success': False, 'url': video_url, 'error': error_msg, 'title': video_info.get('title', 'Unknown') if video_info else 'Unknown'}
 
@@ -363,30 +668,121 @@ def get_playlist_videos(playlist_url):
     """
     플레이리스트에서 비디오 URL 목록을 추출하는 함수
     """
-    ydl_opts = {
-        'quiet': True,
-        'extract_flat': True,  # 메타데이터만 추출
-        'ignoreerrors': True,
-    }
+    # URL 타입 확인 및 비디오 ID 추출
+    video_id = None
+    playlist_id = None
     
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            playlist_info = ydl.extract_info(playlist_url, download=False)
-            if 'entries' in playlist_info:
-                videos = []
-                for entry in playlist_info['entries']:
-                    if entry:  # None이 아닌 경우만
-                        video_url = f"https://www.youtube.com/watch?v={entry['id']}"
-                        videos.append({
-                            'url': video_url,
-                            'title': entry.get('title', 'Unknown'),
-                            'duration': entry.get('duration', 0)
-                        })
-                return videos
-            return []
-    except Exception as e:
-        print(f"플레이리스트 정보 추출 오류: {str(e)}")
-        return []
+    if 'watch?v=' in playlist_url:
+        video_id = playlist_url.split('watch?v=')[1].split('&')[0]
+    elif 'youtu.be/' in playlist_url:
+        video_id = playlist_url.split('youtu.be/')[1].split('?')[0]
+    elif 'playlist?list=' in playlist_url:
+        playlist_id = playlist_url.split('list=')[1].split('&')[0]
+    
+    # 단일 비디오인 경우
+    if video_id:
+        print(f"✅ 단일 비디오로 처리: {video_id}")
+        return [{
+            'url': f"https://www.youtube.com/watch?v={video_id}",
+            'title': 'Unknown',
+            'duration': 0
+        }]
+    
+    # 플레이리스트인 경우
+    if playlist_id:
+        print(f"✅ 플레이리스트로 처리: {playlist_id}")
+        
+        # 여러 가지 방법으로 플레이리스트 정보를 가져오기 시도
+        methods = [
+            # 방법 1: 기본 설정
+            {
+                'quiet': True,
+                'extract_flat': True,
+                'ignoreerrors': True,
+                'no_warnings': True,
+                'socket_timeout': 60,
+                'http_timeout': 60,
+                'retries': 3,
+                'sleep_interval': 1,
+                'max_sleep_interval': 3,
+            },
+            # 방법 2: 더 안정적인 설정
+            {
+                'quiet': True,
+                'extract_flat': True,
+                'ignoreerrors': True,
+                'no_warnings': True,
+                'socket_timeout': 120,
+                'http_timeout': 120,
+                'retries': 5,
+                'sleep_interval': 2,
+                'max_sleep_interval': 10,
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-us,en;q=0.5',
+                    'Accept-Encoding': 'gzip, deflate',
+                    'Connection': 'keep-alive',
+                },
+            },
+            # 방법 3: 최소 설정
+            {
+                'quiet': True,
+                'extract_flat': True,
+                'ignoreerrors': True,
+                'no_warnings': True,
+                'socket_timeout': 30,
+                'http_timeout': 30,
+                'retries': 1,
+            }
+        ]
+        
+        for i, ydl_opts in enumerate(methods, 1):
+            try:
+                print(f"🔍 방법 {i}로 플레이리스트 정보를 가져오는 중...")
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    playlist_info = ydl.extract_info(playlist_url, download=False)
+                    
+                    # playlist_info가 None인 경우 처리
+                    if playlist_info is None:
+                        print(f"❌ 방법 {i} 실패: 플레이리스트 정보를 가져올 수 없습니다")
+                        continue
+                    
+                    # entries가 없는 경우 처리
+                    if 'entries' not in playlist_info:
+                        print(f"❌ 방법 {i} 실패: 플레이리스트에 비디오가 없습니다")
+                        continue
+                    
+                    videos = []
+                    for entry in playlist_info['entries']:
+                        if entry and 'id' in entry:  # None이 아니고 id가 있는 경우만
+                            video_url = f"https://www.youtube.com/watch?v={entry['id']}"
+                            videos.append({
+                                'url': video_url,
+                                'title': entry.get('title', 'Unknown'),
+                                'duration': entry.get('duration', 0)
+                            })
+                    
+                    if videos:
+                        print(f"✅ 방법 {i} 성공: 플레이리스트에서 {len(videos)}개의 비디오를 찾았습니다.")
+                        return videos
+                    else:
+                        print(f"❌ 방법 {i} 실패: 비디오를 찾을 수 없습니다")
+                        
+            except Exception as e:
+                print(f"❌ 방법 {i} 실패: {str(e)}")
+                continue
+        
+        # 모든 방법이 실패한 경우, 수동으로 플레이리스트 ID를 사용
+        print(f"🔄 모든 방법이 실패했습니다. 플레이리스트 ID를 직접 사용합니다: {playlist_id}")
+        return [{
+            'url': f"https://www.youtube.com/playlist?list={playlist_id}",
+            'title': f'Playlist_{playlist_id}',
+            'duration': 0
+        }]
+    
+    print(f"❌ 지원되지 않는 URL 형식: {playlist_url}")
+    return []
 
 def download_playlist_extreme_max(playlist_url, download_path, max_workers=None, quality_format=None):
     """
@@ -428,9 +824,15 @@ def download_playlist_extreme_max(playlist_url, download_path, max_workers=None,
     print("⚠️ 경고: 극한 성능으로 인한 시스템 부하가 발생할 수 있습니다!")
     print("💀 모든 자원을 극한으로 활용하여 최대 성능을 발휘합니다!")
     
-    # 다운로드 경로 생성
+    # 다운로드 경로를 절대 경로로 변환하고 생성
+    download_path = os.path.abspath(download_path)
     if not os.path.exists(download_path):
-        os.makedirs(download_path)
+        try:
+            os.makedirs(download_path, exist_ok=True)
+            print(f"📁 다운로드 경로 생성: {download_path}")
+        except Exception as e:
+            print(f"❌ 다운로드 경로 생성 실패: {e}")
+            return
     
     successful_downloads = 0
     failed_downloads = 0
@@ -521,9 +923,15 @@ def download_playlist_max(playlist_url, download_path, max_workers=None, quality
     print(f"🔥 MAX 모드 다운로드를 시작합니다 (최대 {max_workers}개 동시 다운로드)...")
     print(f"🎬 선택된 화질: {quality_format}")
     
-    # 다운로드 경로 생성
+    # 다운로드 경로를 절대 경로로 변환하고 생성
+    download_path = os.path.abspath(download_path)
     if not os.path.exists(download_path):
-        os.makedirs(download_path)
+        try:
+            os.makedirs(download_path, exist_ok=True)
+            print(f"📁 다운로드 경로 생성: {download_path}")
+        except Exception as e:
+            print(f"❌ 다운로드 경로 생성 실패: {e}")
+            return
     
     successful_downloads = 0
     failed_downloads = 0
@@ -602,9 +1010,15 @@ def download_playlist_parallel(playlist_url, download_path, max_workers=3, quali
     print(f"병렬 다운로드를 시작합니다 (최대 {max_workers}개 동시 다운로드)...")
     print(f"🎬 선택된 화질: {quality_format}")
     
-    # 다운로드 경로 생성
+    # 다운로드 경로를 절대 경로로 변환하고 생성
+    download_path = os.path.abspath(download_path)
     if not os.path.exists(download_path):
-        os.makedirs(download_path)
+        try:
+            os.makedirs(download_path, exist_ok=True)
+            print(f"📁 다운로드 경로 생성: {download_path}")
+        except Exception as e:
+            print(f"❌ 다운로드 경로 생성 실패: {e}")
+            return
     
     successful_downloads = 0
     failed_downloads = 0
@@ -662,24 +1076,56 @@ def download_playlist(playlist_url, download_path, quality_format=None):
     if quality_format is None:
         quality_format = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
     
+    # 다운로드 경로를 절대 경로로 변환하고 생성
+    download_path = os.path.abspath(download_path)
+    if not os.path.exists(download_path):
+        try:
+            os.makedirs(download_path, exist_ok=True)
+            print(f"📁 다운로드 경로 생성: {download_path}")
+        except Exception as e:
+            print(f"❌ 다운로드 경로 생성 실패: {e}")
+            return
+    
+    # 파일명 안전성을 위한 템플릿 설정
+    safe_filename_template = f'{download_path}/%(title).100s.%(ext)s'
+    
+    # 플레이리스트 ID 추출
+    playlist_id = None
+    if 'playlist?list=' in playlist_url:
+        playlist_id = playlist_url.split('list=')[1].split('&')[0]
+    
     # yt-dlp 옵션 설정: 다운로드 방식을 정의
     ydl_opts = {
         'format': quality_format,  # 선택된 화질 사용
         'merge_output_format': 'mp4',  # 최종 출력 형식을 MP4로 강제
-        'outtmpl': f'{download_path}/%(title)s.%(ext)s',  # 파일 이름 형식: 제목.확장자 (저장 경로 포함)
+        'outtmpl': safe_filename_template,  # 파일 이름 형식: 제목.확장자 (저장 경로 포함)
         'noplaylist': False,  # False로 설정: 플레이리스트 전체 다운로드 (True면 단일 비디오만)
         'quiet': False,  # 다운로드 진행 상황을 콘솔에 표시 (True로 하면 조용히)
         'ignoreerrors': True,  # 개별 비디오 오류 무시
         'no_warnings': False,
+        # 파일 저장 안전성 개선
+        'restrictfilenames': True,  # 파일명 제한 (특수문자 제거)
+        'windowsfilenames': False,  # Windows 파일명 규칙 비활성화
+        # 네트워크 안정성 개선
+        'socket_timeout': 60,
+        'http_timeout': 60,
+        'retries': 3,
+        'sleep_interval': 1,
+        'max_sleep_interval': 5,
     }
 
     # 다운로드 실행: yt-dlp 객체 생성 후 URL 입력
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            print(f"🎬 플레이리스트 다운로드 시작: {playlist_url}")
+            if playlist_id:
+                print(f"📋 플레이리스트 ID: {playlist_id}")
             ydl.download([playlist_url])  # 플레이리스트 URL로 다운로드 시작
-        print("다운로드 완료! 파일은 다음 경로에 저장되었습니다:", download_path)
+        print("✅ 다운로드 완료! 파일은 다음 경로에 저장되었습니다:", download_path)
     except Exception as e:
-        print("오류 발생:", str(e))  # 오류 발생 시 메시지 출력 (예: URL 잘못됨, 인터넷 문제)
+        print(f"❌ 오류 발생: {str(e)}")  # 오류 발생 시 메시지 출력 (예: URL 잘못됨, 인터넷 문제)
+        if playlist_id:
+            print(f"💡 플레이리스트 ID를 확인해보세요: {playlist_id}")
 
 # 메인 부분: 프로그램 실행 시 사용자 입력 받기
 if __name__ == "__main__":
