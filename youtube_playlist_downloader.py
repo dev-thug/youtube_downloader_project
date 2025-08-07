@@ -784,7 +784,7 @@ def get_playlist_videos(playlist_url):
     print(f"❌ 지원되지 않는 URL 형식: {playlist_url}")
     return []
 
-def download_playlist_extreme_max(playlist_url, download_path, max_workers=None, quality_format=None):
+def download_playlist_extreme_max(playlist_url, download_path, max_workers=None, quality_format=None, progress_callback=None):
     """
     극한 MAX 모드: 모든 성능과 자원을 극한으로 활용한 플레이리스트 다운로드
     """
@@ -868,6 +868,10 @@ def download_playlist_extreme_max(playlist_url, download_path, max_workers=None,
                     # 진행률 업데이트
                     pbar.update(1)
                     
+                    # 진행률 콜백 호출
+                    if progress_callback:
+                        progress_callback(successful_downloads + failed_downloads, len(videos), result['success'])
+                    
                     # 예상 완료 시간 표시
                     eta = get_eta()
                     pbar.set_description(f"극한 다운로드 진행률 (예상 완료: {eta})")
@@ -892,7 +896,7 @@ def download_playlist_extreme_max(playlist_url, download_path, max_workers=None,
         print(f"\n⚠️ {failed_downloads}개의 비디오 다운로드에 실패했습니다.")
         print("실패 원인: 비디오 비공개, 삭제됨, 지역 제한 등")
 
-def download_playlist_max(playlist_url, download_path, max_workers=None, quality_format=None):
+def download_playlist_max(playlist_url, download_path, max_workers=None, quality_format=None, progress_callback=None):
     """
     MAX 모드: 모든 성능과 자원을 최대한 활용한 플레이리스트 다운로드
     """
@@ -967,6 +971,10 @@ def download_playlist_max(playlist_url, download_path, max_workers=None, quality
                     # 진행률 업데이트
                     pbar.update(1)
                     
+                    # GUI 진행률 콜백 호출
+                    if progress_callback:
+                        progress_callback(successful_downloads + failed_downloads, len(videos), result['success'])
+                    
                     # 예상 완료 시간 표시
                     eta = get_eta()
                     pbar.set_description(f"다운로드 진행률 (예상 완료: {eta})")
@@ -975,6 +983,10 @@ def download_playlist_max(playlist_url, download_path, max_workers=None, quality
                     failed_downloads += 1
                     pbar.set_postfix_str(f"❌ {video['title'][:30]}... - 오류")
                     pbar.update(1)
+                    
+                    # GUI 진행률 콜백 호출 (실패)
+                    if progress_callback:
+                        progress_callback(successful_downloads + failed_downloads, len(videos), False)
     
     # 결과 요약
     elapsed_time = time.time() - download_progress['start_time']
@@ -989,7 +1001,7 @@ def download_playlist_max(playlist_url, download_path, max_workers=None, quality
         print(f"\n⚠️ {failed_downloads}개의 비디오 다운로드에 실패했습니다.")
         print("실패 원인: 비디오 비공개, 삭제됨, 지역 제한 등")
 
-def download_playlist_parallel(playlist_url, download_path, max_workers=3, quality_format=None):
+def download_playlist_parallel(playlist_url, download_path, max_workers=3, quality_format=None, progress_callback=None):
     """
     플레이리스트를 병렬로 다운로드하는 함수
     """
@@ -1048,6 +1060,10 @@ def download_playlist_parallel(playlist_url, download_path, max_workers=3, quali
                     # 진행률 업데이트
                     pbar.update(1)
                     
+                    # GUI 진행률 콜백 호출
+                    if progress_callback:
+                        progress_callback(successful_downloads + failed_downloads, len(videos), result['success'])
+                    
                     # 예상 완료 시간 표시
                     eta = get_eta()
                     pbar.set_description(f"다운로드 진행률 (예상 완료: {eta})")
@@ -1056,6 +1072,10 @@ def download_playlist_parallel(playlist_url, download_path, max_workers=3, quali
                     failed_downloads += 1
                     pbar.set_postfix_str(f"❌ {video['title'][:30]}... - 오류")
                     pbar.update(1)
+                    
+                    # GUI 진행률 콜백 호출 (실패)
+                    if progress_callback:
+                        progress_callback(successful_downloads + failed_downloads, len(videos), False)
     
     # 결과 요약
     elapsed_time = time.time() - download_progress['start_time']
